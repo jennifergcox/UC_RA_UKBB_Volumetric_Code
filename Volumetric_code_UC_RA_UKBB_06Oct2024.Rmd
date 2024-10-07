@@ -1,0 +1,1330 @@
+---
+title: "Volumetric Analysis for UC and RA in UK Biobank"
+knit: (function(input_file, encoding) {
+  out_dir <- 'docs';
+  rmarkdown::render(input_file,
+ encoding=encoding,
+ output_file=file.path(dirname(input_file), out_dir, 'index.html'))})
+output: html_document
+---
+
+### Set up working directory, data and libraries
+The data were initially read using Ken Hanscombe's ukbtools package (ukb_df tool), which reads the .tab file, .r script and .html.
+This is slow process for large files, hence here the data are read and than saved as .rda files, which can be loaded more swiftly for convenience.
+
+```{r setup, include=FALSE, cache = FALSE}
+require("knitr")
+## setting working directory
+opts_knit$set(root.dir = "/Users/k1809984/UKBB/UKBB/UKBiobank_Data/structural_analysis/")
+```
+
+```{r message=FALSE, warning=FALSE}
+# clear workspace
+rm(list = ls())
+# Load packages
+#library(boot)
+#library(corrplot)
+library(cowplot)
+library(dplyr)
+library(effsize)
+library(ggplot2)
+#library(glmnet)
+#library(heplots)
+#library(hier.part)
+#library(Hmisc)
+library(kableExtra)
+library(knitr)
+#library(lm.beta)
+library(MatchIt)
+library(psych)
+#library(pwr)
+library(tidyverse)
+library(ukbtools)
+library(moments)
+```
+### Load downloaded data files, and merge
+Looks for existing file and loads is available.
+```{r}
+data_file <- "/Users/k1809984/UKBB/UKBB/UKBiobank_Data/structural_analysis/ukb_40K_data.rda"
+if (file.exists(data_file)) {
+  cat("Loading data file", data_file, date(),sep = " ")
+  load(file = data_file)
+  } else {
+    tmp <- ukb_df("ukb43748", path = "/Users/k1809984/UKBB/UKBB/UKBiobank_Data/structural_analysis/ukb_40K_data")
+    tmp1 <- ukb_df("ukb43749", path = "/Users/k1809984/UKBB/UKBB/UKBiobank_Data/structural_analysis/ukb_40K_data")
+    # tmp2 <- read.table("rs_fMRI_data.txt", colClasses = c("eid" = "character"))
+    df <- list(tmp, tmp1) %>% reduce(left_join, by = "eid") # using purr
+    save(df, file = data_file)
+    rm(list = ls(pattern = "tmp*"))
+  }
+```
+
+Data from n = `r dim(df)[1]` UK Biobank participants were downloaded for the study. 
+
+### Subset to include those with scans only
+Subset to only include those who completed brain MRI from imaging assessment.
+```{r}
+df$brain_mri_measuring_method_f12187_2_0 <- as.factor(df$brain_mri_measuring_method_f12187_2_0)
+table(df$brain_mri_measuring_method_f12187_2_0)
+df1 <- df
+df <- subset(df, df$brain_mri_measuring_method_f12187_2_0 == "Direct entry")
+```
+
+### Subset to include those with FSL FIRST values only 
+
+```{r}
+df$availability_of_hippocampal_volume <- is.na(df$volume_of_hippocampus_left_f25019_2_0)
+table(is.na(df$volume_of_hippocampus_left_f25019_2_0))
+df2 <- df
+df <- subset(df,df$availability_of_hippocampal_volume == FALSE)
+```
+
+
+### Reformat age (numeric) and sex (factor) variables
+```{r}
+df[,grep("age_when_attended", names(df))] <- lapply(df[,grep("age_when_attended", names(df))], as.numeric)
+df$sex <- factor(df$sex_f31_0_0)
+df$sex <- dplyr::recode(df$sex, "0" = "Female", "1" = "Male")
+#df$diabetes_diagnosed_by_doctor_f2443_2_0 <-  factor(df$diabetes_diagnosed_by_doctor_f2443_2_0)
+#df$stroke_history <- factor(!is.na(df$age_stroke_diagnosed_f4056_2_0) & as.numeric(df$age_stroke_diagnosed_f4056_2_0) > 0, labels = c("no stroke", "stroke"))
+
+var.list <- c("body_mass_index_bmi_f21001_2_0",
+              "diastolic_blood_pressure_automated_reading_f4079_2_0",
+              "diastolic_blood_pressure_automated_reading_f4079_2_1",
+              "systolic_blood_pressure_automated_reading_f4080_2_0",
+              "systolic_blood_pressure_automated_reading_f4080_2_1")
+              #"hip_circumference_f49_2_0",
+              #"weight_f21002_2_0",
+              #"hand_grip_strength_left_f46_2_0",
+              #"hand_grip_strength_right_f47_2_0",
+              #"overall_health_rating_f2178_2_0",
+              #"longstanding_illness_disability_or_infirmity_f2188_2_0",
+              #"height_f12144_2_0",
+              #"mean_tfmri_head_motion_averaged_across_space_and_time_points_f25742_2_0",
+              #"mean_rfmri_head_motion_averaged_across_space_and_time_points_f25741_2_0",
+              #"volumetric_scaling_from_t1_head_image_to_standard_space_f25000_2_0",
+              #"fluid_intelligence_score_f20016_2_0",
+              #"duration_to_complete_numeric_path_trail_1_f6348_2_0",
+              #"duration_to_complete_alphanumeric_path_trail_2_f6350_2_0",
+              #"number_of_puzzles_correctly_solved_f6373_2_0",
+              #"duration_spent_answering_each_puzzle_f6333_2_0",
+              #"duration_spent_answering_each_puzzle_f6333_2_1",
+              #"duration_spent_answering_each_puzzle_f6333_2_2",
+              #"duration_spent_answering_each_puzzle_f6333_2_3",
+              #"duration_spent_answering_each_puzzle_f6333_2_4",
+              #"duration_spent_answering_each_puzzle_f6333_2_5",
+              #"duration_spent_answering_each_puzzle_f6333_2_6",
+              #"duration_spent_answering_each_puzzle_f6333_2_7",
+              #"duration_spent_answering_each_puzzle_f6333_2_8",
+              #"duration_spent_answering_each_puzzle_f6333_2_9",
+              #"duration_spent_answering_each_puzzle_f6333_2_10",
+              #"duration_spent_answering_each_puzzle_f6333_2_11",
+              #"duration_spent_answering_each_puzzle_f6333_2_12",
+              #"duration_spent_answering_each_puzzle_f6333_2_13",
+              #"duration_spent_answering_each_puzzle_f6333_2_14",
+              #"number_of_puzzles_correct_f6382_2_0",
+              #"number_of_puzzles_correct_f21004_2_0", ## alternative coding for Tower rearranging task puzzles correct
+              #"duration_of_moderate_activity_f894_2_0",
+              #"duration_of_vigorous_activity_f914_2_0")
+df[,var.list] <- lapply(df[,var.list], as.numeric)
+```
+
+
+### Make list of imaging variables and recode variables to numeric
+```{r}
+imaging.vars.list <- grep("forced|nifti|discrepancy", grep("volume|skeleton|tract", names(df), value = T), invert = T, value = T)
+df[,grep("volume", names(df))] <- lapply(df[,grep("volume", names(df))], as.numeric)
+df[,grep("skeleton", names(df))] <- lapply(df[,grep("skeleton", names(df))], as.numeric)
+df[,grep("tract", names(df))] <- lapply(df[,grep("tract", names(df))], as.numeric)
+```
+
+### Create a composite value of both right and left volumes of the FSL FIRST subcortical volumes
+
+```{r}
+df$sum_volume_of_accumbens <- df$volume_of_accumbens_left_f25023_2_0 + df$volume_of_accumbens_right_f25024_2_0
+df$sum_volume_of_amygdala <- df$volume_of_amygdala_left_f25021_2_0 + df$volume_of_amygdala_right_f25022_2_0
+df$sum_volume_of_caudate <- df$volume_of_caudate_left_f25013_2_0 + df$volume_of_caudate_right_f25014_2_0
+df$sum_volume_of_pallidum <- df$volume_of_pallidum_left_f25017_2_0 + df$volume_of_pallidum_right_f25018_2_0
+df$sum_volume_of_putamen <- df$volume_of_putamen_left_f25015_2_0 + df$volume_of_putamen_right_f25016_2_0
+df$sum_volume_of_thalamus <- df$volume_of_thalamus_left_f25011_2_0 + df$volume_of_thalamus_right_f25012_2_0
+df$sum_volume_of_hippocampus <- df$volume_of_hippocampus_left_f25019_2_0 + df$volume_of_hippocampus_right_f25020_2_0
+```
+
+## Inflammatory conditions
+
+```{r}
+autoimmune_disease_list <- read.csv("~/UKBB/UKBB/UKBiobank_Data/autoimmune_prevalences_40K.csv")
+head(autoimmune_disease_list, 15) %>% kable() %>% kable_styling(bootstrap_options = c("striped"), fixed_thead = T)
+```
+Prevalence. Customise Ken's ICD prevalence function to return some more details. Use do.call() to combine lapply outputs into a data.frame.
+```{r}
+ukb_icd_prevalence_jc <- function (data, icd.code, icd.version = 10) {
+    ukb_case <- data %>% 
+      dplyr::select(matches(paste("^diagnoses.*icd", icd.version, sep = ""))) %>%
+      purrr::map_df(~grepl(icd.code, ., perl = TRUE)) %>% 
+      rowSums() > 0
+    prev <- signif(sum(ukb_case, na.rm = TRUE)/length(ukb_case),3)
+    results <- cbind(ICD.10.Code = icd.code, Prevalence = prev, "n cases" = sum(ukb_case, na.rm = TRUE), "UKB n" = length(ukb_case))
+    return(results)
+}
+
+ukb_icd_prevalence_jc(df, icd.version = 10, icd.code = "M06")
+ukb_icd_prevalence_jc(df, icd.version = 10, icd.code = "M05")
+ukb_icd_prevalence_jc(df, icd.version = 10, icd.code = "K51")
+```
+
+#### Checking prevalence of diseases based on keywords
+```{r}
+ukb_icd_prevalence_jc(df, icd.version = 10, icd.code = "M08")
+```
+```{r paged.print=FALSE}
+# ukb_icd_code_meaning(icd.code = "M051", icd.version = 10)
+ukb_icd_keyword("Ulcerative", icd.version = 10)
+# ukb_icd_prevalence(df, icd.version = 10, icd.code = "I50")
+```
+
+```{r}
+x <- as.data.frame(do.call(rbind, lapply(as.character(gsub("[.]","", autoimmune_disease_list[!is.na(autoimmune_disease_list$ICD.10.Code),2])), function(x) ukb_icd_prevalence_jc(df, icd.version = 10, icd.code = x))))
+x$ICD.10.Code <- gsub('^(\\w{3})(\\w+)$', '\\1.\\2', x$ICD.10.Code)
+y <- merge(autoimmune_disease_list[1:2], x)
+aid_prevalences <- y[!duplicated(y$Autoimmune.Disease),]
+# write.csv(file = "~/UKBB/UKBiobank_Data/autoimmune_prevalences_40K.csv", aid_prevalences, quote = T, row.names = F)
+```
+
+
+### Descriptives
+
+```{r paged.print=FALSE}
+df$age_at_scan <- df$age_when_attended_assessment_centre_f21003_2_0
+describe(df$age_at_scan)
+table(df$sex)
+```
+
+```{r}
+ggplot(df, aes(age_at_scan)) +
+  geom_histogram(binwidth = 1, fill = "darkgoldenrod2", colour = "black", lwd = 0.25) +
+  xlab('Age at scan (years)') +
+  theme_cowplot()
+```
+
+# Analysis
+## Set up data
+### Select only healthy participants
+Generic function to generate a data.frame with TRUE or FALSE for the presence/absence of any ICD diagnosis. Adapted from Ken's ukb_icd_diagnosis() function.
+```{r}
+has_icd.diagnosis <- function(id, icd.version){
+  x <- df %>% dplyr::filter(eid %in% id) %>% 
+  dplyr::select(matches(paste("^diagnoses.*icd", icd.version, sep = ""))) %>% 
+  dplyr::select_if(colSums(!is.na(.)) > 0) %>% ncol() != 0
+  return(data.frame(id, diagnosis))
+}
+```
+
+Specific function for RA or UC
+```{r}
+has_specific_icd.diagnosis <- function(id, code){
+  x <- df %>% dplyr::filter(eid %in% id) %>% 
+  dplyr::select(matches(paste("^diagnoses.*icd", 10, sep = "")))
+  diagnosis <- any(grepl(code,x))
+  return(data.frame(id, diagnosis))
+}
+```
+
+```{r}
+has_specific_icd.diagnosis("1000060", "R69")
+```
+
+Create RA data.frames with M05 and M06 codes
+```{r}
+has_RA.df <- do.call(rbind, lapply(df$eid[1:40579], function(x) has_specific_icd.diagnosis(x,"M05|M06")))
+```
+
+Create UC data.frame with K51 code.
+```{r}
+has_UC.df <- do.call(rbind, lapply(df$eid[1:40579], function(x) has_specific_icd.diagnosis(x, "K51")))
+```
+
+Rename variables to RA and UC specific, rename id to eid.
+```{r}
+has_RA.df <- setNames(has_RA.df, c("eid","RA"))
+has_UC.df <- setNames(has_UC.df, c("eid","UC"))
+```
+
+Merge RA.df with original df.
+```{r}
+names(has_RA.df) <- c("eid", "RA")
+df <- merge(df, has_RA.df)
+table(df$RA)
+```
+
+Merge UC.df with original df.
+```{r}
+names(has_UC.df) <- c("eid", "UC")
+df <- merge(df, has_UC.df)
+table(df$UC)
+```
+
+
+Save data.frame as .Rda file for loading in future
+```{r}
+save(df, file="autoimmune_df.rda")
+```
+
+Conditional if else to check if .Rda exists and load if so.
+```{r}
+if (file.exists("autoimmune_df.rda")) {
+  load("autoimmune_df.rda")
+  } else {
+    "File not found"
+  }
+```
+# Analysis
+## Set up data
+### Select only healthy participants
+Function to generate a data.frame with TRUE or FALSE for the presence/absence of ICD diagnosis. Adapted from Ken's ukb_icd_diagnosis() function.
+```{r}
+has_icd.diagnosis <- function(id, icd.version){
+  x <- df %>% dplyr::filter(eid %in% id) %>% 
+  dplyr::select(matches(paste("^diagnoses.*icd", icd.version, sep = ""))) %>% 
+  dplyr::select_if(colSums(!is.na(.)) > 0) %>% ncol() != 0
+  return(data.frame(id, x))
+}
+```
+
+### Compute ICD diagnosis data
+Running on the whole dataset takes >4 hours for n>20,000. So load .RDA file if available.
+```{r}
+if (file.exists("ukb_icd.diagnosis_data.rda")) {
+  load("ukb_icd.diagnosis_data.rda")
+  } else {
+    has_icd.diagnosis.df <- do.call(rbind, lapply(df$eid[1:40579], function(x)
+    has_icd.diagnosis(x, 10)))
+    save(has_icd.diagnosis.df, file = "ukb_icd.diagnosis_data.rda")
+  }
+```
+
+Merge to add health status variable to data frame.
+```{r}
+names(has_icd.diagnosis.df) <- c("eid", "icd_positive")
+df <- merge(df, has_icd.diagnosis.df)
+table(df$icd_positive)
+
+```
+
+Check number of ICD-positive against subjective health and long-standing illness.
+```{r}
+kable(table(df$overall_health_rating_f2178_2_0, df$icd_positive)) %>% kable_styling()
+kable(table(df$longstanding_illness_disability_or_infirmity_f2188_2_0, df$icd_positive)) %>% kable_styling()
+```
+
+### Make data.frame of healthy people only
+Include people with no ICD-10 diagnosis, no self-reported long-standing illness disability or infirmity (F2188) and good or excellent self-reported health (F2178).
+Remove subjects with NAs in the age column and with the missing imaging variables.
+```{r paged.print=FALSE}
+df$healthy <- ifelse(df$icd_positive == "FALSE" & df$longstanding_illness_disability_or_infirmity_f2188_2_0 == "No" & df$overall_health_rating_f2178_2_0 == "Excellent" & df$diabetes_diagnosed_by_doctor_f2443_2_0 == "No", "healthy", "non-healthy")
+healthy.df <- subset(df, df$healthy == "healthy")
+table(is.na(df$healthy))
+```
+
+
+### Descriptive statistics of healthy vs. non-healthy
+Run descriptive statistics
+```{r paged.print=FALSE}
+describeBy(df$age_at_scan, df$healthy)
+table(df$sex, df$healthy)
+round(prop.table(table(df$sex, df$healthy), 2),3)
+```
+
+```{r}
+ggplot(subset(df, !is.na(df$healthy)), aes(age_at_scan, color = healthy)) +
+  geom_density(aes(fill = healthy), alpha = 0.5) +
+  xlab("Age at MRI scan (years)") +
+  scale_fill_brewer(palette = "Set1") +
+  scale_color_brewer(palette = "Set1") +
+  theme_cowplot() 
+```
+
+#### Ethnic background
+Lots of missing data here, around 50% NAs. Coding here: http://biobank.ctsu.ox.ac.uk/crystal/coding.cgi?id=1001
+```{r}
+table(is.na(df$ethnic_background_f21000_2_0))
+table(df$ethnic_background_f21000_2_0, df$healthy)
+round(100*prop.table(table(df$ethnic_background_f21000_2_0, df$healthy), 2),2)
+```
+
+### Make dataframe of UC and RA subjects only
+Two separate dataframes for RA and UC. Include people with true value in RA column and true value in UC in respective dataframe. 
+Remove subjects with NAs in the age column and with the missing imaging variables.
+
+### Descriptive statistics of RA subjects
+
+```{r paged.print=FALSE}
+describeBy(df$age_at_scan, df$RA)
+table(df$sex, df$RA)
+round(prop.table(table(df$sex, df$RA), 2),3)
+```
+
+### Descriptive statistics of UC subjects
+Age and gender distribution of UC
+
+```{r paged.print=FALSE}
+
+describeBy(df$age_at_scan, df$UC)
+table(df$sex, df$UC)
+round(prop.table(table(df$sex, df$UC), 2),3)
+
+```
+
+### Make RA and UC dataframes
+
+```{r}
+RA.df <- subset(df,df$RA == "TRUE")
+UC.df <- subset(df,df$UC == "TRUE")
+```
+
+### Creating a healthy control group for RA patients. 
+
+First instance need to merge the healthy subset with the RA and UC dataframes. 
+
+```{r}
+healthy_RA.df <- rbind(RA.df, healthy.df)
+healthy_UC.df <- rbind(UC.df, healthy.df)
+```
+
+### Create control group for RA patients
+The summary statistics show that the RA subset has a 29.2% male and 70.8% female sex distribution with a mean age of 65.52. First find a matched control group using matchit function
+```{r}
+set.seed(422)
+m.out_RA <- matchit(RA ~ age_at_scan + sex, data = healthy_RA.df, method = "cem", k2k = TRUE, cutpoints = 0)
+summary(m.out_RA)
+```
+
+Create control group from matching output
+
+```{r}
+RA_healthy_control.df <- match.data(m.out_RA, group = "control")
+```
+
+### Descriptive statistics of RA control group
+```{r}
+describe(RA_healthy_control.df$age_at_scan)
+table(RA_healthy_control.df$sex)
+```
+### Visualise age distribution in RA control and RA patient population
+```{r}
+ggplot(RA.df, aes(x = age_at_scan)) + geom_density(color="blue", fill="blue") 
+ggplot(RA_healthy_control.df, aes(x = age_at_scan)) + geom_density(color="blue", fill="blue") + geom_density(data=RA.df, fill = "purple")
+```
+#### Check the age distribution between RA group and control group
+
+```{r}
+par(mfrow = c(1,2))
+hist(RA.df$age_at_scan, breaks = 20, col = "darkgoldenrod2", main = "RA Patient Age", xlab = "Age at scan (years)")
+hist(RA_healthy_control.df$age_at_scan, breaks = 20, col = "darkgoldenrod2", main = "Control Group Age", xlab = "Age at scan (years)")
+par(mfrow = c(1,1))
+```
+
+### T-test to check age at scan between RA and RA control group
+
+```{r}
+t.test(RA.df$age_at_scan, RA_healthy_control.df$age_at_scan)
+```
+
+### Create control group for UC patients
+The summary statistics show that the UC subset has a 49.4% male and 50.6% female sex distribution with a mean age of 64.09.
+
+```{r}
+set.seed(522)
+m.out_UC <- matchit(UC ~ age_at_scan + sex, data = healthy_UC.df, method = "cem", k2k = TRUE, cutpoints = 0)
+summary(m.out_UC)
+```
+
+Create control group from matching output
+
+```{r}
+UC_healthy_control.df <- match.data(m.out_UC, group = "control")
+```
+
+### Descriptive statistics of UC control group
+```{r}
+describe(UC_healthy_control.df$age_at_scan)
+table(UC_healthy_control.df$sex)
+```
+
+### Visualise age distribution in UC control and UC patient population
+```{r}
+ggplot(UC_healthy_control.df, aes(x = age_at_scan)) + geom_density(color="blue", fill="blue") + geom_density(data=UC.df, fill = "purple")
+```
+
+#### Check the age distribution between UC group and control group
+
+```{r}
+par(mfrow = c(1,2))
+hist(UC.df$age_at_scan, breaks = 20, col = "darkgoldenrod2", main = "UC Patient Age", xlab = "Age at scan (years)")
+hist(UC_healthy_control.df$age_at_scan, breaks = 20, col = "darkgoldenrod2", main = "Control Group Age", xlab = "Age at scan (years)")
+par(mfrow = c(1,1))
+```
+
+
+### T-test to check age at scan between UC and UC control group
+
+```{r}
+t.test(UC.df$age_at_scan, UC_healthy_control.df$age_at_scan)
+```
+
+### In order to bind the dataframes together the number of variables (columns) must match. The matchit function creates two additional columns for the data binning process. These two additional columns are added in this section with 0s in order to retain the matchit function information in the control group, but still allow the dataframes to be bound together
+```{r}
+RA.df$weights <- 0
+RA.df$subclass <- 0
+UC.df$weights <- 0
+UC.df$subclass <- 0
+RA.df$distance <- 0
+UC.df$distance <- 0
+```
+
+### Creating ICV calculation from total grey matter, total white matter and CSF volumes. Corresponding column names are volume_of_grey_matter_f25006_2_0, volume_of_white_matter_f25008_2_0, volume_of_ventricular_cerebrospinal_fluid_f25004_2_0
+```{r}
+RA.df$ICV <- rowSums(RA.df[, c("volume_of_grey_matter_f25006_2_0", "volume_of_white_matter_f25008_2_0", "volume_of_ventricular_cerebrospinal_fluid_f25004_2_0")])
+RA_healthy_control.df$ICV <- rowSums(RA_healthy_control.df[, c("volume_of_grey_matter_f25006_2_0", "volume_of_white_matter_f25008_2_0", "volume_of_ventricular_cerebrospinal_fluid_f25004_2_0")])
+```
+
+### Distance has to be added as a column to both the healthy control group for both UC and RA to perform rbind
+```{r}
+UC_healthy_control.df$distance <- 0
+RA_healthy_control.df$distance <- 0
+```
+
+### Statistical test to analyse hippocampal volumes between RA and RA control group. Volume of hippocampus left (25019) and volume of hippocampus right (25020). 
+
+```{r}
+RA.df$group <- "RA"
+RA_healthy_control.df$group <- "RA_control"
+RA_combined.df <- rbind(RA.df, RA_healthy_control.df)
+table(RA_combined.df$group)
+RA_combined.df$sex <- as.factor(RA_combined.df$sex)
+RA_combined.df$group <- as.factor(RA_combined.df$group)
+summary(lm(volume_of_hippocampus_left_f25019_2_0 ~ group + age_at_scan + sex, data = RA_combined.df))
+summary(lm(volume_of_hippocampus_right_f25020_2_0 ~ group + age_at_scan + sex, data = RA_combined.df))
+```
+
+### Statistical test to analyse hippocampal volumes between UC and UC control group
+
+```{r}
+UC.df$group <- "UC"
+UC_healthy_control.df$group <- "UC_control"
+UC.df$ICV <- rowSums(UC.df[, c("volume_of_grey_matter_f25006_2_0", "volume_of_white_matter_f25008_2_0", "volume_of_ventricular_cerebrospinal_fluid_f25004_2_0")])
+UC_healthy_control.df$ICV <- rowSums(UC_healthy_control.df[, c("volume_of_grey_matter_f25006_2_0", "volume_of_white_matter_f25008_2_0", "volume_of_ventricular_cerebrospinal_fluid_f25004_2_0")])
+UC_combined.df <- rbind(UC.df, UC_healthy_control.df)
+table(UC_combined.df$group)
+UC_combined.df$sex <- as.factor(UC_combined.df$sex)
+UC_combined.df$group <- as.factor(UC_combined.df$group)
+summary(lm(volume_of_hippocampus_left_f25019_2_0 ~ group + age_at_scan + sex, data = UC_combined.df))
+summary(lm(volume_of_hippocampus_right_f25020_2_0 ~ group + age_at_scan + sex, data = UC_combined.df))
+#fstr(UC_combined.df$sex)
+
+```
+### Box Plots for Right and Left Hippocampal Volumes in UC
+```{r}
+#boxplot(UC_combined.df$volume_of_hippocampus_right_f25020_2_0 ~ UC_combined.df$group, ylab = "Right Hippocampal Volume", xlab = "Group")
+boxplot(UC_combined.df$volume_of_hippocampus_left_f25019_2_0 ~ UC_combined.df$group, ylab = "Left Hippocampal Volume", xlab = "Group")
+```
+### Box Plots for Right and Left Hippocampal Volumes in RA
+```{r}
+boxplot(RA_combined.df$volume_of_hippocampus_right_f25020_2_0 ~ RA_combined.df$group, ylab = "Right Hippocampal Volume", xlab = "Group")
+boxplot(RA_combined.df$volume_of_hippocampus_left_f25019_2_0 ~ RA_combined.df$group, ylab = "Left Hippocampal Volume", xlab = "Group")
+```
+
+
+### Outcome measure of grey matter volume where ICV correction isn't necessary. This is being run as an alternative outcome measure as we review the best way to look at hippocampal volumes
+
+```{r}
+summary(lm(volume_of_grey_matter_normalised_for_head_size_f25005_2_0 ~ group + age_at_scan + sex, data = RA_combined.df))
+summary(lm(volume_of_grey_matter_normalised_for_head_size_f25005_2_0 ~ group + age_at_scan + sex, data = UC_combined.df))
+```
+
+
+### Subsetting ICD 10 codes of RA subject group. Main ICD10 diagnoses codes are in columns 7511 through 7576 in the RA dataframe. Column name follows the format "diagnoses_main_icd10_f41202_0_0" through to "_65". Secondary ICD10 diagnoses codes are in columns 7605-7788 and follow the format "diagnoses_secondary_icd10_f41204_0_0" through to "_183".
+
+```{r}
+RA_subject_ICD_10.df <- RA.df[,c(7511:7576, 7605:7788)]
+write.csv(RA_subject_ICD_10.df, file = "/Users/k1809984/UKBB/UKBB/UKBiobank_Data/structural_analysis/RA_subject_ICD10.csv")
+```
+
+### Subsetting ICD 10 codes of UC subject group. Main ICD10 diagnoses codes are in columns 7511 through 7576 in the UC dataframe. Column name follows the format "diagnoses_main_icd10_f41202_0_0" through to "_65". Secondary ICD10 diagnoses codes are in columns 7605-7788 and follow the format "diagnoses_secondary_icd10_f41204_0_0" through to "_183".
+```{r}
+UC_subject_ICD_10.df <- UC.df[,c(7511:7576, 7605:7788)]
+write.csv(UC_subject_ICD_10.df, file = "/Users/k1809984/UKBB/UKBB/UKBiobank_Data/structural_analysis/UC_subject_ICD10.csv")
+```
+
+### Create separate male and female dataframes for RA and UC. This is done because the sex is exact matched by creating separate dataframes. Then later a nearest neighbor matching method will be used for age.
+
+```{r}
+female_patient_population.df <- subset(df, sex == "Female")
+male_patient_population.df <- subset(df, sex == "Male")
+```
+
+### Create normal control group for RA patients
+The summary statistics show that the RA subset has a 29.2% male and 70.8% female sex distribution with a mean age of 65.52. This is equal to 189 females and 78 males from the first 40,579 subjects. 
+
+```{r}
+set.seed(622)
+m.out_normal_RA_male <- matchit(RA ~ age_at_scan, data = male_patient_population.df, method = "nearest", ratio = 3, cutpoints = 0)
+summary(m.out_normal_RA_male)
+m.out_normal_RA_female <- matchit(RA ~ age_at_scan, data = female_patient_population.df, method = "nearest", ratio = 3, cutpoints = 0)
+summary(m.out_normal_RA_female)
+```
+
+Create control group from matching output
+
+```{r}
+RA_normal_control_group_male.df <- match.data(m.out_normal_RA_male, group = "control")
+RA_normal_control_group_female.df <- match.data(m.out_normal_RA_female, group = "control")
+RA_normal_control_group.df <- bind_rows(RA_normal_control_group_male.df, RA_normal_control_group_female.df)
+```
+
+### Descriptive statistics of RA normal control group
+```{r}
+describe(RA_normal_control_group.df$age_at_scan)
+```
+### Visualise age distribution in RA normal control and RA patient population
+```{r}
+ggplot(RA.df, aes(x = age_at_scan)) + geom_density(color="blue", fill="blue") 
+ggplot(RA_normal_control_group.df, aes(x = age_at_scan)) + geom_density(color="blue", fill="blue") + geom_density(data=RA.df, fill = "purple")
+```
+
+#### Check the age distribution between RA group and normal control group
+
+```{r}
+par(mfrow = c(1,2))
+hist(RA.df$age_at_scan, breaks = 20, col = "darkgoldenrod2", main = "RA Patient Age", xlab = "Age at scan (years)")
+hist(RA_normal_control_group.df$age_at_scan, breaks = 20, col = "darkgoldenrod2", main = "Control Group Age", xlab = "Age at scan (years)")
+par(mfrow = c(1,1))
+```
+### T-test to check age at scan between RA and RA control group
+
+```{r}
+t.test(RA.df$age_at_scan, RA_normal_control_group.df$age_at_scan)
+```
+
+### Create control group for UC patients
+The summary statistics show that the UC subset has a 49.4% male and 50.6% female sex distribution with a mean age of 64.09. This equals 128 females and 125 males from the first 40,579 subjects. Original set seed was 500. This was later adjusted to 125 females and 124 males as it was discovered that some of the subjects were missing the FSL FIRST measurements.  
+
+```{r}
+set.seed(622)
+m.out_normal_UC_male <- matchit(UC ~ age_at_scan, data = male_patient_population.df, method = "nearest", ratio = 3, cutpoints = 0)
+summary(m.out_normal_UC_male)
+m.out_normal_UC_female <- matchit(UC ~ age_at_scan, data = female_patient_population.df, method = "nearest", ratio = 3, cutpoints = 0)
+summary(m.out_normal_UC_female)
+```
+
+Create control group from matching output
+
+```{r}
+UC_normal_control_group_male.df <- match.data(m.out_normal_UC_male, group = "control")
+UC_normal_control_group_female.df <- match.data(m.out_normal_UC_female, group = "control")
+UC_normal_control_group.df <- bind_rows(UC_normal_control_group_male.df, UC_normal_control_group_female.df)
+```
+
+
+### Descriptive statistics of UC normal control group
+```{r}
+describe(UC_normal_control_group.df$age_at_scan)
+```
+
+
+### Visualise age distribution in UC normal control group and UC patient population
+```{r}
+ggplot(UC_normal_control_group.df, aes(x = age_at_scan)) + geom_density(color="blue", fill="blue") + geom_density(data=UC.df, fill = "purple")
+```
+
+#### Check the age distribution between UC normal group and control group
+
+```{r}
+par(mfrow = c(1,2))
+hist(UC.df$age_at_scan, breaks = 20, col = "darkgoldenrod2", main = "UC Patient Age", xlab = "Age at scan (years)")
+hist(UC_normal_control_group.df$age_at_scan, breaks = 20, col = "darkgoldenrod2", main = "Control Group Age", xlab = "Age at scan (years)")
+par(mfrow = c(1,1))
+```
+
+### T-test to check age at scan between UC and UC normal control group
+
+```{r}
+t.test(UC.df$age_at_scan, UC_normal_control_group.df$age_at_scan)
+```
+
+### Creating ICV calculation from total grey matter, total white matter and CSF volumes. Corresponding column names are volume_of_grey_matter_f25006_2_0, volume_of_white_matter_f25008_2_0, volume_of_ventricular_cerebrospinal_fluid_f25004_2_0
+```{r}
+RA_normal_control_group.df$ICV <- rowSums(RA_normal_control_group.df[, c("volume_of_grey_matter_f25006_2_0", "volume_of_white_matter_f25008_2_0", "volume_of_ventricular_cerebrospinal_fluid_f25004_2_0")])
+RA.df$ICV <- rowSums(RA.df[, c("volume_of_grey_matter_f25006_2_0", "volume_of_white_matter_f25008_2_0", "volume_of_ventricular_cerebrospinal_fluid_f25004_2_0")])
+```
+### A binary yes/no for hypertension will be used in analyses later. In order to facilitate this a hypertension variable needs to be added to the dataframes. This will be added to RA.df, RA_normal_control_group.df, UC.df, UC_normal_contro_group.df separately as there are intra group analysis being performed as well as control/subject analyses. 
+The first step is to create a dataframe of RA patients with hypertension. The ICD10 code for hypertension is I10
+
+```{r}
+has_RA_hypertension.df <- do.call(rbind, lapply(RA.df$eid[1:267], function(x) has_specific_icd.diagnosis(x, "I10")))
+```
+
+Rename variables to hypertension specific, rename id to eid.
+```{r}
+has_RA_hypertension.df <- setNames(has_RA_hypertension.df, c("eid","hypertension"))
+```
+
+Merge RA.df with original df.
+```{r}
+names(has_RA_hypertension.df) <- c("eid", "hypertension")
+RA.df <- merge(RA.df, has_RA_hypertension.df)
+table(RA.df$hypertension)
+```
+
+The first step is to create a dataframe of UC patients with hypertension. The ICD10 code for hypertension is I10
+
+```{r}
+has_UC_hypertension.df <- do.call(rbind, lapply(UC.df$eid[1:253], function(x) has_specific_icd.diagnosis(x, "I10")))
+```
+
+Rename variables to hypertension specific, rename id to eid.
+```{r}
+has_UC_hypertension.df <- setNames(has_UC_hypertension.df, c("eid","hypertension"))
+```
+
+Merge UC.df with original df.
+```{r}
+names(has_UC_hypertension.df) <- c("eid", "hypertension")
+UC.df <- merge(UC.df, has_UC_hypertension.df)
+table(UC.df$hypertension)
+```
+
+### Create hypertension variable for UC and RA normal control groups
+```{r}
+has_UC_control_hypertension.df <- do.call(rbind, lapply(UC_normal_control_group.df$eid[1:747], function(x) has_specific_icd.diagnosis(x, "I10")))
+```
+
+Rename variables to hypertension specific, rename id to eid.
+```{r}
+has_UC_control_hypertension.df <- setNames(has_UC_control_hypertension.df, c("eid","hypertension"))
+```
+
+Merge UC_normal_control_group.df with original df.
+```{r}
+names(has_UC_control_hypertension.df) <- c("eid", "hypertension")
+UC_normal_control_group.df <- merge(UC_normal_control_group.df, has_UC_control_hypertension.df)
+table(UC_normal_control_group.df$hypertension)
+```
+```{r}
+has_RA_control_hypertension.df <- do.call(rbind, lapply(RA_normal_control_group.df$eid[1:774], function(x) has_specific_icd.diagnosis(x, "I10")))
+```
+
+Rename variables to hypertension specific, rename id to eid.
+```{r}
+has_RA_control_hypertension.df <- setNames(has_RA_control_hypertension.df, c("eid","hypertension"))
+```
+
+Merge RA_normal_control_group.df with original df.
+```{r}
+names(has_RA_control_hypertension.df) <- c("eid", "hypertension")
+RA_normal_control_group.df <- merge(RA_normal_control_group.df, has_RA_control_hypertension.df)
+table(RA_normal_control_group.df$hypertension)
+```
+
+
+### Statistical test to analyse hippocampal volumes between RA and RA control group. Volume of hippocampus left (25019) and volume of hippocampus right (25020). 
+
+```{r}
+RA.df$group <- "RA"
+RA_normal_control_group.df$group <- "RA_control"
+RA_normal_combined.df <- rbind(RA.df, RA_normal_control_group.df)
+table(RA_normal_combined.df$group)
+RA_normal_combined.df$sex <- as.factor(RA_normal_combined.df$sex)
+RA_normal_combined.df$group <- as.factor(RA_normal_combined.df$group)
+summary(lm(volume_of_hippocampus_left_f25019_2_0 ~ group + age_at_scan + sex + ICV, data = RA_normal_combined.df))
+summary(RA_normal_right_1 <- lm(volume_of_hippocampus_right_f25020_2_0 ~ group + age_at_scan + sex + ICV, data = RA_normal_combined.df))
+summary(RA_normal_total_1 <- lm(sum_volume_of_hippocampus ~ group + age_at_scan + sex + ICV, data = RA_normal_combined.df))
+```
+### Calculating the cohen's d coefficient for left, right and total hippocampal volume for RA
+```{r}
+cohen.d(RA_normal_combined.df$volume_of_hippocampus_left_f25019_2_0, RA_normal_combined.df$RA, alpha = 0.05, std = TRUE)
+cohen.d(RA_normal_combined.df$volume_of_hippocampus_right_f25020_2_0, RA_normal_combined.df$RA, alpha = 0.05, std = TRUE)
+cohen.d(RA_normal_combined.df$sum_volume_of_hippocampus, RA_normal_combined.df$RA, alpha = 0.05, std = TRUE)
+```
+
+
+### Statistical test to analyse hippocampal volumes between RA and RA control group. Volume of hippocampus left (25019) and volume of hippocampus right (25020) with ICV as a covariate. 
+
+```{r}
+summary(lm(volume_of_hippocampus_left_f25019_2_0 ~ group + age_at_scan + sex + ICV + hypertension, data = RA_normal_combined.df))
+summary(lm(volume_of_hippocampus_right_f25020_2_0 ~ group + age_at_scan + sex + ICV + hypertension, data = RA_normal_combined.df))
+summary(lm(sum_volume_of_hippocampus ~ group + age_at_scan + sex + ICV + hypertension, data = RA_normal_combined.df))
+```
+### Statistical test to analyse hippocampal volumes between UC and UC normal control group
+
+```{r}
+UC.df$group <- "UC"
+UC_normal_control_group.df$group <- "UC_control"
+UC.df$ICV <- rowSums(UC.df[, c("volume_of_grey_matter_f25006_2_0", "volume_of_white_matter_f25008_2_0", "volume_of_ventricular_cerebrospinal_fluid_f25004_2_0")])
+UC_normal_control_group.df$ICV <- rowSums(UC_normal_control_group.df[, c("volume_of_grey_matter_f25006_2_0", "volume_of_white_matter_f25008_2_0", "volume_of_ventricular_cerebrospinal_fluid_f25004_2_0")])
+UC_normal_combined.df <- rbind(UC.df, UC_normal_control_group.df)
+table(UC_normal_combined.df$group)
+UC_normal_combined.df$sex <- as.factor(UC_normal_combined.df$sex)
+UC_normal_combined.df$group <- as.factor(UC_normal_combined.df$group)
+summary(lm(volume_of_hippocampus_left_f25019_2_0 ~ group + age_at_scan + sex, data = UC_normal_combined.df))
+summary(lm(volume_of_hippocampus_right_f25020_2_0 ~ group + age_at_scan + sex, data = UC_normal_combined.df))
+#fstr(UC_combined.df$sex)
+```
+
+### Linear model of right and left hippocampus with ICV as a covariate for UC
+
+```{r}
+summary(lm(volume_of_hippocampus_left_f25019_2_0 ~ group + age_at_scan + sex + ICV + hypertension, data = UC_normal_combined.df))
+summary(lm(volume_of_hippocampus_right_f25020_2_0 ~ group + age_at_scan + sex + ICV + hypertension, data = UC_normal_combined.df))
+summary(lm(sum_volume_of_hippocampus ~ group + age_at_scan + sex + ICV + hypertension, data = UC_normal_combined.df))
+```
+
+### Cohen's d effect size calculation for hippocampal volumes in UC
+```{r}
+cohen.d(UC_normal_combined.df$volume_of_hippocampus_left_f25019_2_0, UC_normal_combined.df$UC, alpha = 0.05, std = TRUE)
+cohen.d (UC_normal_combined.df$volume_of_hippocampus_right_f25020_2_0, UC_normal_combined.df$UC, alpha = 0.05, std = TRUE)
+cohen.d (UC_normal_combined.df$sum_volume_of_hippocampus, UC_normal_combined.df$UC, alpha = 0.05, std = TRUE)
+```
+
+
+### Subsetting ICD 10 codes of RA subject group. Main ICD10 diagnoses codes are in columns 7511 through 7576 in the RA dataframe. Column name follows the format "diagnoses_main_icd10_f41202_0_0" through to "_65". Secondary ICD10 diagnoses codes are in columns 7605-7788 and follow the format "diagnoses_secondary_icd10_f41204_0_0" through to "_183".
+
+```{r}
+RA_normal_control_ICD_10.df <- RA_normal_control_group.df[,c(7511:7576, 7605:7788)]
+write.csv(RA_normal_control_ICD_10.df, file = "/Users/k1809984/UKBB/UKBB/UKBiobank_Data/structural_analysis/RA_normal_control_ICD10.csv")
+```
+
+### Subsetting ICD 10 codes of UC subject group. Main ICD10 diagnoses codes are in columns 7511 through 7576 in the UC dataframe. Column name follows the format "diagnoses_main_icd10_f41202_0_0" through to "_65". Secondary ICD10 diagnoses codes are in columns 7605-7788 and follow the format "diagnoses_secondary_icd10_f41204_0_0" through to "_183".
+```{r}
+UC_normal_control_ICD_10.df <- UC_normal_control_group.df[,c(7511:7576, 7605:7788)]
+write.csv(UC_normal_control_ICD_10.df, file = "/Users/k1809984/UKBB/UKBB/UKBiobank_Data/structural_analysis/UC_normal_control_ICD10.csv")
+```
+
+### A secondary analysis will be done to compare RA patients with and without hypertension. 
+
+Creating two separate dataframes for RA patients with hypertension and those without hypertension
+
+```{r}
+RA_hypertension.df <- subset(RA.df, RA.df$hypertension == TRUE)
+RA_no_hypertension.df <- subset(RA.df, RA.df$hypertension == FALSE)
+```
+
+Run a t test to see if there is a difference in hippocampal volume between RA patients with hypertension and without hypertension
+
+```{r}
+table(RA.df$hypertension)
+RA.df$sex <- as.factor(RA.df$sex)
+RA.df$hypertension <- as.factor(RA.df$hypertension)
+summary(lm(volume_of_hippocampus_left_f25019_2_0 ~ hypertension + age_at_scan + sex, data = RA.df))
+summary(lm(volume_of_hippocampus_right_f25020_2_0 ~ hypertension + age_at_scan + sex, data = RA.df))
+summary(lm(sum_volume_of_hippocampus ~ hypertension + age_at_scan + sex, data = RA.df))
+```
+### Calculate cohen's d effect size for RA subjects with and without hypertension
+```{r}
+cohen.d(RA.df$volume_of_hippocampus_left_f25019_2_0, RA.df$hypertension, alpha = 0.05, std = TRUE)
+cohen.d(RA.df$volume_of_hippocampus_right_f25020_2_0, RA.df$hypertension, alpha = 0.05, std = TRUE)
+cohen.d(RA.df$sum_volume_of_hippocampus, RA.df$hypertension, alpha = 0.05, std = TRUE)
+```
+
+### A secondary analysis will be done to compare UC patients with and without hypertension. 
+
+Creating two separate dataframes for UC patients with hypertension and those without hypertension
+
+```{r}
+UC_hypertension.df <- subset(UC.df, UC.df$hypertension == TRUE)
+UC_no_hypertension.df <- subset(UC.df, UC.df$hypertension == FALSE)
+```
+
+Run a t test to see if there is a difference in hippocampal volume between UC patients with hypertension and without hypertension
+
+```{r}
+table(UC.df$hypertension)
+UC.df$sex <- as.factor(UC.df$sex)
+UC.df$hypertension <- as.factor(UC.df$hypertension)
+summary(lm(volume_of_hippocampus_left_f25019_2_0 ~ hypertension + age_at_scan + sex, data = UC.df))
+summary(lm(volume_of_hippocampus_right_f25020_2_0 ~ hypertension + age_at_scan + sex, data = UC.df))
+summary(lm(sum_volume_of_hippocampus ~ hypertension + age_at_scan + sex, data = UC.df))
+```
+Calculating cohen's d effect size for UC subjects with and without hypertension
+```{r}
+cohen.d(UC.df$volume_of_hippocampus_left_f25019_2_0, UC.df$hypertension, alpha = 0.05, std = TRUE)
+cohen.d(UC.df$volume_of_hippocampus_right_f25020_2_0, UC.df$hypertension, alpha = 0.05, std = TRUE)
+cohen.d(UC.df$sum_volume_of_hippocampus, UC.df$hypertension, alpha = 0.05, std = TRUE)
+```
+
+
+Visualising the hippocampal volumes of the RA normal control group to look for outliers
+
+```{r}
+ggplot(RA_normal_control_group.df, aes(x = age_at_scan , y = volume_of_hippocampus_right_f25020_2_0)) +
+    geom_point()
+
+ggplot(RA_normal_control_group.df, aes(x = age_at_scan , y = volume_of_hippocampus_left_f25019_2_0)) +
+    geom_point()
+
+ggplot(RA.df, aes(x = age_at_scan , y = volume_of_hippocampus_right_f25020_2_0)) +
+    geom_point()
+
+ggplot(RA_normal_control_group.df, aes(x = age_at_scan , y = volume_of_hippocampus_left_f25019_2_0)) +
+    geom_point()
+```
+
+Visualising the hippocampal volumes of the RA patient group to look for outliers
+
+```{r}
+ggplot(RA.df, aes(x = eid , y = volume_of_hippocampus_right_f25020_2_0)) +
+    geom_point()
+
+ggplot(RA.df, aes(x = eid , y = volume_of_hippocampus_left_f25019_2_0)) +
+    geom_point()
+
+```
+
+### RA secondary analysis on additional subcortical regions calculated from the FSL FIRST pipeline. This includes accumbens, amygdala, caudate, pallidum, putamen and thalamus. These were calculated for both R and L in each region, but for the purposes of this analysis the total of both R and L were used. This was done in part because there isn't a specific hypothesis on laterality and to reduce the multiple testing corrections required. 
+
+Accumbens t-test
+```{r}
+RA_normal_combined.df$sex <- as.factor(RA_normal_combined.df$sex)
+RA_normal_combined.df$group <- as.factor(RA_normal_combined.df$group)
+summary(lm(sum_volume_of_accumbens ~ group + age_at_scan + sex + ICV, data = RA_normal_combined.df))
+cohen.d(RA_normal_combined.df$sum_volume_of_accumbens, RA_normal_combined.df$RA, alpha = 0.05, std = TRUE)
+```
+
+RA Accumbens Multiple Testing Correction
+
+```{r}
+p.adjust(0.167, method = "bonferroni", n = 6)
+```
+
+Amygdala t-test
+
+```{r}
+RA_normal_combined.df$sex <- as.factor(RA_normal_combined.df$sex)
+RA_normal_combined.df$group <- as.factor(RA_normal_combined.df$group)
+summary(lm(sum_volume_of_amygdala ~ group + age_at_scan + sex + ICV, data = RA_normal_combined.df))
+cohen.d(RA_normal_combined.df$sum_volume_of_amygdala, RA_normal_combined.df$RA, alpha = 0.05, std = TRUE)
+```
+
+RA Amygdala Multiple Testing Correction
+
+```{r}
+p.adjust(0.00192, method = "bonferroni", n = 6)
+```
+### As a tertiary analysis Right and Left Amygdala volume will be looked at separately
+
+RA Right Amygdala
+```{r}
+table(RA_normal_combined.df$group)
+summary(lm(volume_of_amygdala_right_f25022_2_0 ~ group + age_at_scan + sex + ICV, data = RA_normal_combined.df))
+cohen.d(RA_normal_combined.df$volume_of_amygdala_right_f25022_2_0, RA_normal_combined.df$RA, alpha = 0.05, std = TRUE)
+```
+Left Amygdala RA
+
+```{r}
+table(RA_normal_combined.df$group)
+summary(lm(volume_of_amygdala_left_f25021_2_0 ~ group + age_at_scan + sex + ICV, data = RA_normal_combined.df))
+cohen.d(RA_normal_combined.df$volume_of_amygdala_left_f25021_2_0, RA_normal_combined.df$RA, alpha = 0.05, std = TRUE)
+```
+Caudate t-test RA
+
+```{r}
+table(RA_normal_combined.df$group)
+RA_normal_combined.df$sex <- as.factor(RA_normal_combined.df$sex)
+RA_normal_combined.df$group <- as.factor(RA_normal_combined.df$group)
+summary(lm(sum_volume_of_caudate ~ group + age_at_scan + sex + ICV, data = RA_normal_combined.df))
+cohen.d(RA_normal_combined.df$sum_volume_of_caudate, RA_normal_combined.df$RA, alpha = 0.05, std = TRUE)
+```
+
+RA Caudate Multiple Testing Correction
+
+```{r}
+p.adjust(0.429417, method = "bonferroni", n = 6)
+```
+
+Pallidum T-test RA
+
+```{r}
+table(RA_normal_combined.df$group)
+RA_normal_combined.df$sex <- as.factor(RA_normal_combined.df$sex)
+RA_normal_combined.df$group <- as.factor(RA_normal_combined.df$group)
+summary(lm(sum_volume_of_pallidum ~ group + age_at_scan + sex + ICV, data = RA_normal_combined.df))
+cohen.d(RA_normal_combined.df$sum_volume_of_pallidum, RA_normal_combined.df$RA, alpha = 0.05, std = TRUE)
+```
+
+RA Pallidum Multiple Testing Correction
+
+```{r}
+p.adjust(0.515, method = "bonferroni", n = 6)
+```
+
+Putamen T-test RA
+
+```{r}
+table(RA_normal_combined.df$group)
+RA_normal_combined.df$sex <- as.factor(RA_normal_combined.df$sex)
+RA_normal_combined.df$group <- as.factor(RA_normal_combined.df$group)
+summary(lm(sum_volume_of_putamen ~ group + age_at_scan + sex + ICV, data = RA_normal_combined.df))
+cohen.d(RA_normal_combined.df$sum_volume_of_putamen, RA_normal_combined.df$RA, alpha = 0.05, std = TRUE)
+```
+
+RA Putamen Multiple Test Correction
+
+```{r}
+p.adjust(0.43963, method = "bonferroni", n = 6)
+```
+
+Thalamus T-test RA
+
+```{r}
+table(RA_normal_combined.df$group)
+RA_normal_combined.df$sex <- as.factor(RA_normal_combined.df$sex)
+RA_normal_combined.df$group <- as.factor(RA_normal_combined.df$group)
+summary(lm(sum_volume_of_thalamus ~ group + age_at_scan + sex+ ICV, data = RA_normal_combined.df))
+cohen.d(RA_normal_combined.df$sum_volume_of_thalamus, RA_normal_combined.df$RA, alpha = 0.05, std = TRUE)
+```
+
+RA Thalamus Multiple Testing Correction
+
+```{r}
+p.adjust(0.884, method = "bonferroni", n = 6)
+```
+
+Total Hippocampus t-test RA
+```{r}
+table(RA_normal_combined.df$group)
+RA_normal_combined.df$sex <- as.factor(RA_normal_combined.df$sex)
+RA_normal_combined.df$group <- as.factor(RA_normal_combined.df$group)
+summary(lm(sum_volume_of_hippocampus ~ group + age_at_scan + sex + ICV, data = RA_normal_combined.df))
+cohen.d(RA_normal_combined.df$sum_volume_of_hippocampus, RA_normal_combined.df$RA, alpha = 0.05, std = TRUE)
+```
+
+### UC secondary analysis on additional subcortical regions calculated from the FSL FIRST pipeline. This includes accumbens, amygdala, caudate, pallidum, putamen and thalamus. These were calculated for both R and L in each region, but for the purposes of this analysis the total of both R and L were used. This was done in part because there isn't a specific hypothesis on laterality and to reduce the multiple testing corrections required. 
+
+Accumbens t-test UC
+```{r}
+table(UC_normal_combined.df$group)
+UC_normal_combined.df$sex <- as.factor(UC_normal_combined.df$sex)
+UC_normal_combined.df$group <- as.factor(UC_normal_combined.df$group)
+summary(lm(sum_volume_of_accumbens ~ group + age_at_scan + sex+ ICV, data = UC_normal_combined.df))
+cohen.d(UC_normal_combined.df$sum_volume_of_accumbens, UC_normal_combined.df$UC, alpha = 0.05, std = TRUE)
+```
+
+UC Accumbens Multiple Testing Corrections
+
+```{r}
+p.adjust(0.123, method = "bonferroni", n = 6)
+```
+
+Amygdala t-test UC
+
+```{r}
+table(UC_normal_combined.df$group)
+UC_normal_combined.df$sex <- as.factor(UC_normal_combined.df$sex)
+UC_normal_combined.df$group <- as.factor(UC_normal_combined.df$group)
+summary(lm(sum_volume_of_amygdala ~ group + age_at_scan + sex + ICV, data = UC_normal_combined.df))
+cohen.d(UC_normal_combined.df$sum_volume_of_amygdala, UC_normal_combined.df$UC, alpha = 0.05, std = TRUE)
+```
+
+UC Amygdala Multiple Testing Correction
+
+```{r}
+p.adjust(0.05730, method = "bonferroni", n = 6)
+```
+### As a tertiary analysis Right and Left Amygdala volume will be looked at separately
+
+UC Right Amygdala
+```{r}
+table(UC_normal_combined.df$group)
+summary(lm(volume_of_amygdala_right_f25022_2_0 ~ group + age_at_scan + sex + ICV, data = UC_normal_combined.df))
+cohen.d(UC_normal_combined.df$volume_of_amygdala_right_f25022_2_0, UC_normal_combined.df$UC, alpha = 0.05, std = TRUE)
+```
+
+Left Amygdala UC
+
+```{r}
+table(UC_normal_combined.df$group)
+summary(lm(volume_of_amygdala_left_f25021_2_0 ~ group + age_at_scan + sex + ICV, data = UC_normal_combined.df))
+cohen.d(UC_normal_combined.df$volume_of_amygdala_left_f25021_2_0, UC_normal_combined.df$UC, alpha = 0.05, std = TRUE)
+```
+
+Caudate t-test UC
+```{r}
+table(UC_normal_combined.df$group)
+UC_normal_combined.df$sex <- as.factor(UC_normal_combined.df$sex)
+UC_normal_combined.df$group <- as.factor(UC_normal_combined.df$group)
+summary(lm(sum_volume_of_caudate ~ group + age_at_scan + sex + ICV, data = UC_normal_combined.df))
+cohen.d(UC_normal_combined.df$sum_volume_of_caudate, UC_normal_combined.df$UC, alpha = 0.05, std = TRUE)
+```
+
+UC Caudate Multiple Testing Correction
+```{r}
+p.adjust(0.776, method = "bonferroni", n = 6)
+```
+
+Pallidum t-test UC
+```{r}
+UC_normal_combined.df$sex <- as.factor(UC_normal_combined.df$sex)
+UC_normal_combined.df$group <- as.factor(UC_normal_combined.df$group)
+summary(lm(sum_volume_of_pallidum ~ group + age_at_scan + sex + ICV, data = UC_normal_combined.df))
+cohen.d(UC_normal_combined.df$sum_volume_of_pallidum, UC_normal_combined.df$UC, alpha = 0.05, std = TRUE)
+```
+
+UC Pallidum Multiple Testing Correction
+```{r}
+p.adjust(0.9510, method = "bonferroni", n = 6)
+```
+
+Putamen t-test UC
+```{r}
+UC_normal_combined.df$sex <- as.factor(UC_normal_combined.df$sex)
+UC_normal_combined.df$group <- as.factor(UC_normal_combined.df$group)
+summary(lm(sum_volume_of_putamen ~ group + age_at_scan + sex + ICV, data = UC_normal_combined.df))
+cohen.d(UC_normal_combined.df$sum_volume_of_putamen, UC_normal_combined.df$UC, alpha = 0.05, std = TRUE)
+```
+
+UC Putamen Muliple Testing Correction
+```{r}
+p.adjust(0.50808, method = "bonferroni", n = 6)
+```
+
+Thalamus T-test UC
+
+```{r}
+UC_normal_combined.df$sex <- as.factor(UC_normal_combined.df$sex)
+UC_normal_combined.df$group <- as.factor(UC_normal_combined.df$group)
+summary(lm(sum_volume_of_thalamus ~ group + age_at_scan + sex + ICV, data = UC_normal_combined.df))
+cohen.d(UC_normal_combined.df$sum_volume_of_thalamus, UC_normal_combined.df$UC, alpha = 0.05, std = TRUE)
+```
+
+UC Thalamus Multiple Testing Correction
+```{r}
+p.adjust(0.59, method = "bonferroni", n = 6)
+```
+
+Total Hippocampus t-test UC
+```{r}
+UC_normal_combined.df$sex <- as.factor(UC_normal_combined.df$sex)
+UC_normal_combined.df$group <- as.factor(UC_normal_combined.df$group)
+summary(lm(sum_volume_of_hippocampus ~ group + age_at_scan + sex + ICV, data = UC_normal_combined.df))
+```
+
+Cohen's d for total hippocampal volume 
+```{r}
+cohen.d(UC_normal_combined.df$sum_volume_of_hippocampus, UC_normal_combined.df$UC, alpha = 0.05, std = TRUE)
+```
+
+Visualising the amygdala volumes of the RA group and the RA control group 
+
+```{r}
+ggplot(RA_normal_control_group.df, aes(x = age_at_scan , y = sum_volume_of_amygdala)) +
+    geom_point() +
+    geom_smooth()
+
+ggplot(RA.df, aes(x = age_at_scan , y = sum_volume_of_amygdala)) +
+    geom_point() + 
+    geom_smooth()
+
+```
+
+### Visualisation of Results for Advisory Discussion
+
+Amygdala in RA
+
+```{r}
+boxplot(RA_normal_combined.df$sum_volume_of_amygdala ~ RA_normal_combined.df$group, ylab = "Total Amygdala Volume", xlab = "Group")
+```
+
+Amygdala in UC
+
+```{r}
+boxplot(UC_normal_combined.df$sum_volume_of_amygdala ~ UC_normal_combined.df$group, ylab = "Total Amygdala Volume", xlab = "Group")
+```
+Total Hippocampal Volume in UC
+```{r}
+y_expression <- expression(Total ~ Hippocampal ~ Volume ~ (mm^3))
+boxplot(UC_normal_combined.df$sum_volume_of_hippocampus ~ UC_normal_combined.df$group, ylab = y_expression, xlab = "Group", col=c("salmon1", "cornflowerblue"))
+legend("bottomleft", inset = c(-0.15,-0.5), xpd = TRUE, legend = c("UC = ulcerative colitis", "UC_control = control group"))
+```
+
+
+### Looking at Hippocampal/Amygdala complex by summing the structures together.
+
+```{r}
+RA_normal_combined.df$hippocampal_amygdala_complex <- RA_normal_combined.df$sum_volume_of_amygdala +  RA_normal_combined.df$sum_volume_of_hippocampus
+UC_normal_combined.df$hippocampal_amygdala_complex <- UC_normal_combined.df$sum_volume_of_amygdala + UC_normal_combined.df$sum_volume_of_hippocampus
+```
+
+### T test looking at the difference in the total hippocampal-amygdala-complex between RA subjects versus controls 
+
+```{r}
+RA_normal_combined.df$sex <- as.factor(RA_normal_combined.df$sex)
+RA_normal_combined.df$group <- as.factor(RA_normal_combined.df$group)
+summary(lm(hippocampal_amygdala_complex ~ group + age_at_scan + sex + ICV, data = RA_normal_combined.df))
+```
+
+Cohen's d for RA hippocampal amygdala complex
+
+```{r}
+cohen.d(RA_normal_combined.df$hippocampal_amygdala_complex, RA_normal_combined.df$RA, alpha = 0.05, std = TRUE)
+```
+
+### T test looking at the difference in the total hippocampal-amygdala-complex between UC subjects versus controls 
+
+```{r}
+UC_normal_combined.df$sex <- as.factor(UC_normal_combined.df$sex)
+UC_normal_combined.df$group <- as.factor(UC_normal_combined.df$group)
+summary(lm(hippocampal_amygdala_complex ~ UC + age_at_scan + sex + ICV + hypertension, data = UC_normal_combined.df))
+```
+
+Cohen's d for UC hippocampal-amygdala complex
+
+```{r}
+cohen.d(UC_normal_combined.df$hippocampal_amygdala_complex, UC_normal_combined.df$UC, alpha = 0.05, std = TRUE)
+```
+
+#### Demographic Information 
+
+### Smoking Status
+
+```{r}
+table(RA.df$smoking_status_f20116_0_0)
+table(RA_normal_control_group.df$smoking_status_f20116_0_0)
+table(UC.df$smoking_status_f20116_0_0)
+table(UC_normal_control_group.df$smoking_status_f20116_0_0)
+                                                      
+```
+
+
+###Ethnicity - using data field ethnic_background_f21000_2_0 
+```{r}
+table(RA_normal_combined.df$ethnic_background_f21000_2_0, RA_normal_combined.df$RA)
+round(100*prop.table(table(RA_normal_combined.df$ethnic_background_f21000_2_0, RA_normal_combined.df$RA), 2), 2)
+```
+
+###BMI
+```{r paged.print=FALSE}
+by(RA_normal_combined.df$body_mass_index_bmi_f21001_2_0, RA_normal_combined.df$RA, function(x) describe(x, quant = c(.25,.75), na.rm = T))
+by(UC_normal_combined.df$body_mass_index_bmi_f21001_2_0, UC_normal_combined.df$UC, function(x) describe(x, quant = c(0.25,0.75), na.rm = T))
+```
+
+### Education - not sure which data field to use. Age_completed_full_time_education_f845_2_0 has too many "NA"s. Perhaps Education score, but I can't currently find that in this dataframe. 
+```{r paged.print=FALSE}
+by(RA_normal_combined.df$body_mass_index_bmi_f21001_2_0, RA_normal_combined.df$RA, function(x) describe(x, quant = c(.25,.75), na.rm = T))
+by(UC_normal_combined.df$body_mass_index_bmi_f21001_2_0, UC_normal_combined.df$UC, function(x) describe(x, quant = c(0.25,0.75), na.rm = T))
+```
+
+### For demographic table I need to create a binary yes/no for hypercholosterolemia. ICD 10 code is E78
+
+```{r}
+has_UC_combined_hypercholosterolemia.df <- do.call(rbind, lapply(UC_normal_combined.df$eid[1:996], function(x) has_specific_icd.diagnosis(x, "E78")))
+has_RA_combined_hypercholosterolemia.df <- do.call(rbind, lapply(RA_normal_combined.df$eid[1:1032], function(x) has_specific_icd.diagnosis(x, "E78")))
+```
+
+Rename variables to hypertension specific, rename id to eid.
+```{r}
+has_UC_combined_hypercholosterolemia.df <- setNames(has_UC_combined_hypercholosterolemia.df, c("eid","hypercholesterolemia"))
+has_RA_combined_hypercholosterolemia.df <- setNames(has_RA_combined_hypercholosterolemia.df, c("eid", "hypercholesterolemia"))
+```
+
+Merge UC_normal_combined.df with original df.
+```{r}
+names(has_UC_combined_hypercholosterolemia.df) <- c("eid", "hypercholesterolemia")
+UC_normal_combined.df <- merge(UC_normal_combined.df, has_UC_combined_hypercholosterolemia.df)
+table(UC_normal_combined.df$hypercholesterolemia)
+```
+
+Merge RA_normal_combined.df with original df.
+```{r}
+names(has_RA_combined_hypercholosterolemia.df) <- c("eid", "hypercholesterolemia")
+RA_normal_combined.df <- merge(RA_normal_combined.df, has_RA_combined_hypercholosterolemia.df)
+table(RA_normal_combined.df$hypercholesterolemia)
+```
+
+### Hypercholesterolemia Demographic Information
+
+```{r}
+table(RA_normal_combined.df$hypercholesterolemia, RA_normal_combined.df$RA)
+table(UC_normal_combined.df$hypercholesterolemia, UC_normal_combined.df$UC)
+```
+
+#### Blood pressure - currently testing the syntax of this with my dataframes. Starting with RA. If it works I will extrapolate to UC 
+```{r paged.print=FALSE}
+print("Diastolic")
+by(RA_normal_combined.df$diastolic_blood_pressure_automated_reading_f4079_2_0, RA_normal_combined.df$RA, function(x) describe(x, quant = c(.25,.75), na.rm = T))
+print("Systolic")
+by(RA_normal_combined.df$systolic_blood_pressure_automated_reading_f4080_2_0, RA_normal_combined.df$RA, function(x) describe(x, quant = c(.25,.75), na.rm = T))
+```
+
+#### Diabetes
+```{r paged.print=FALSE}
+table(RA.df$diabetes_diagnosed_by_doctor_f2443_2_0)
+table(RA_normal_control_group.df$diabetes_diagnosed_by_doctor_f2443_2_0)
+table(UC.df$diabetes_diagnosed_by_doctor_f2443_2_0)
+table(UC_normal_control_group.df$diabetes_diagnosed_by_doctor_f2443_2_0)
+```
+
+
+### White Matter Hyperinstensities Total Volume Analysis
+UC
+```{r}
+UC_normal_combined.df$sex <- as.factor(UC_normal_combined.df$sex)
+UC_normal_combined.df$group <- as.factor(UC_normal_combined.df$group)
+summary(lm(total_volume_of_white_matter_hyperintensities_from_t1_and_t2_flair_images_f25781_2_0 ~ group + age_at_scan + sex + ICV, data = UC_normal_combined.df))
+```
+
+RA
+```{r}
+RA_normal_combined.df$sex <- as.factor(RA_normal_combined.df$sex)
+RA_normal_combined.df$group <- as.factor(RA_normal_combined.df$group)
+summary(lm(total_volume_of_white_matter_hyperintensities_from_t1_and_t2_flair_images_f25781_2_0 ~ group + age_at_scan + sex + ICV, data = RA_normal_combined.df))
+```
+
+
+# Note on the education/qualifications code. The variable is qualifications_f6138_2_0) 
+
+###Testing propensity score matching using the MatchIt package and matchit function to sample control population
+
+```{r}
+set.seed(1003)
+df_test.df <- df
+m.out_testing_exact <- matchit(RA ~ age_at_scan + sex, data = df_test.df, method = "exact")
+summary(m.out_testing_exact) 
+```
+
+
+### Outputting the control group for RA
+
+```{r}
+RA_test_control.df <- match.data(m.out, group = "control")
+```
+
+Output the age and sex to check the UC control group 
+
+```{r}
+UC_control_group_matching.df <- UC_normal_control_group.df[,c(7827,1382)]
+write.csv(UC_control_group_matching.df, file = "/Users/k1809984/UKBB/UKBB/UKBiobank_Data/structural_analysis/UC_control_group_matching.csv")
+```
+
+Output the age and sex to check the UC group 
+
+```{r}
+UC_group_matching.df <- UC.df[,c(7827,1382)]
+write.csv(UC_group_matching.df, file = "/Users/k1809984/UKBB/UKBB/UKBiobank_Data/structural_analysis/UC_group_matching.csv")
+```
+
+### Education Code
+
+```{r}
+# clean and then examine
+# Education (visit 1)
+RA_test.df[ ,c("qualifications_f6138_0_0", "qualifications_f6138_0_1","qualifications_f6138_0_2", "qualifications_f6138_0_3", "qualifications_f6138_0_4", "qualifications_f6138_0_5")]  <- lapply(RA_test.df[, c("qualifications_f6138_0_0", "qualifications_f6138_0_1","qualifications_f6138_0_2", "qualifications_f6138_0_3", "qualifications_f6138_0_4", "qualifications_f6138_0_5")] , FUN = function(x) car::recode(x, "-7=NA;-3=NA; 1=4; 2=3; 3=2; 4=1; 5=1; 6=1"))
+
+# Highest qualification
+RA_test.df$Highest_degree_obtained <- apply(RA_test.df[ ,c("qualifications_f6138_0_0", "qualifications_f6138_0_1","qualifications_f6138_0_2", "qualifications_f6138_0_3", "qualifications_f6138_0_4", "qualifications_f6138_0_5")], 1, function(x) {max(as.numeric(as.character(x)), na.rm = T)})
+
+#NAs returned as "-Infs" recoded
+RA_test.df$Highest_degree_obtained[RA_test.df$Highest_degree_obtained=="-Inf"] <- NA
+
+summary(RA_test.df$Highest_degree_obtained)
+```
+
